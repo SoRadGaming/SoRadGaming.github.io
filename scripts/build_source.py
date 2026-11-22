@@ -7,14 +7,23 @@ Each app repo publishes its own entry on GitHub Pages:
 If an app can't be fetched right now, its entry from the currently live shared source is kept, so a hiccup in one
 repo never drops an app from Feather.
 
+Mirroring (MIRROR=1, set in CI): each app's IPA is copied into a GitHub Release of THIS repo
+(tag <repo>-<version>) and the source points at that release asset. Those URLs never disappear, unlike the app's
+Pages site which only holds its latest IPA, so a Feather copy of the source that is a few builds old still
+installs, and older versions stay installable from the version history.
+
 Usage: build_source.py <owner> <out_dir>
 """
 import html
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
+
+MAX_VERSIONS = 10
 
 UA = {"User-Agent": "feather-source-builder"}
 
@@ -42,6 +51,68 @@ def app_entry(base):
     return None
 
 
+def download(url, path):
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=120) as r, open(path, "wb") as f:
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+    return os.path.getsize(path)
+
+
+def gh(*args):
+    return subprocess.run(["gh", *args], capture_output=True, text=True)
+
+
+def mirror(entry, repo_name, this_repo):
+    """Copies the IPA into a release of this repo; returns the permanent URL (or None)."""
+    url = entry.get("downloadURL", "")
+    version = str(entry.get("version", ""))
+    if not url or not version or "/releases/download/" in url:
+        return url or None
+    asset = url.rsplit("/", 1)[-1]
+    tag = f"{repo_name}-{version}"
+    permanent = f"https://github.com/{this_repo}/releases/download/{tag}/{asset}"
+    view = gh("release", "view", tag, "--repo", this_repo, "--json", "assets", "-q", ".assets[].name")
+    if view.returncode == 0 and asset in view.stdout.split():
+        return permanent
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, asset)
+        try:
+            size = download(url, path)
+        except Exception as e:
+            print(f"  could not download {url}: {e}")
+            return None
+        notes = f"{entry.get('name')} {version}: mirrored from {url} for the Feather source."
+        if view.returncode == 0:
+            r = gh("release", "upload", tag, path, "--repo", this_repo, "--clobber")
+        else:
+            r = gh("release", "create", tag, path, "--repo", this_repo, "--title", f"{entry.get('name')} {version}",
+                   "--notes", notes, "--latest=false")
+        if r.returncode != 0:
+            print(f"  release upload failed: {r.stderr.strip()}")
+            return None
+        print(f"  mirrored {asset} ({size} bytes) -> {permanent}")
+        entry["size"] = size
+    return permanent
+
+
+def with_history(entry, old):
+    """Current version first, then earlier mirrored versions from the live source (permanent URLs only)."""
+    current = (entry.get("versions") or [{}])[0]
+    current = dict(current)
+    current["downloadURL"] = entry["downloadURL"]
+    current["size"] = entry.get("size", current.get("size"))
+    history = [current]
+    for v in (old or {}).get("versions", []):
+        if v.get("version") != current.get("version") and "/releases/download/" in str(v.get("downloadURL", "")):
+            history.append(v)
+    entry["versions"] = history[:MAX_VERSIONS]
+    return entry
+
+
 def main():
     owner, out = sys.argv[1].lower(), sys.argv[2]
     root = f"https://{owner}.github.io"
@@ -56,6 +127,7 @@ def main():
     except Exception as e:  # first deploy, or Pages down
         print(f"No live source to fall back on: {e}")
 
+    this_repo = os.environ.get("GITHUB_REPOSITORY", "")
     apps = []
     featured = []
     for item in config["apps"]:
@@ -71,13 +143,27 @@ def main():
             print("  using the previously published entry")
         entry = dict(entry)
         entry.setdefault("developerName", "SoRadGaming")
+        if os.environ.get("MIRROR") == "1" and this_repo:
+            permanent = mirror(entry, item["repo"], this_repo)
+            if permanent:
+                entry["downloadURL"] = permanent
+        entry = with_history(entry, previous.get(entry.get("bundleIdentifier")))
         apps.append(entry)
         if item.get("featured"):
             featured.append(entry["bundleIdentifier"])
         print(f"  {entry.get('name')} {entry.get('version')}")
 
     meta = config["source"]
-    icon = meta.get("iconURL") or (apps[0]["iconURL"] if apps else "")
+    os.makedirs(out, exist_ok=True)
+    icon = apps[0]["iconURL"] if apps else ""
+    if meta.get("iconURL"):
+        # Host the source icon ourselves (plain .png URL, no redirects or query strings).
+        try:
+            download(meta["iconURL"], os.path.join(out, "icon.png"))
+            icon = f"{root}/icon.png"
+        except Exception as e:
+            print(f"Could not fetch source icon: {e}")
+            icon = meta["iconURL"]
     source = {
         "name": meta["name"],
         "identifier": meta["identifier"],
