@@ -1,0 +1,53 @@
+# Builds the shared Feather source (source.json + landing page) from every app in apps.json and deploys it to
+# https://<owner>.github.io/. Runs on push, every 30 minutes, on demand, and when an app's CI pings it.
+name: Feather source
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+  repository_dispatch:
+    types: [app-updated]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: write   # keepalive: re-enable this workflow so the schedule never lapses after 60 quiet days
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build source
+        run: python3 scripts/build_source.py "$GITHUB_REPOSITORY_OWNER" site
+
+      - name: Validate
+        run: |
+          python3 -c "import json; s=json.load(open('site/source.json')); assert s['apps'], 'no apps'; print([a['name']+' '+a['version'] for a in s['apps']])"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Keep the schedule alive
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/pages.yml/enable" >/dev/null && echo "schedule kept alive"

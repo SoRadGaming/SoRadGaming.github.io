@@ -1,0 +1,13 @@
+{
+  "source": {
+    "name": "SoRadGaming Apps",
+    "identifier": "com.soradgaming.source",
+    "subtitle": "Sideloadable builds of SoRadGaming's iOS apps",
+    "description": "Every app here is built by GitHub Actions on each push and installed with Feather. New versions show up as updates.",
+    "tintColor": "FF7A2B"
+  },
+  "apps": [
+    { "repo": "Accord_Ambient", "featured": true },
+    { "repo": "TR256i_Thermal", "featured": true }
+  ]
+}
