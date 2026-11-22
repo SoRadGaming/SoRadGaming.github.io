@@ -77,7 +77,7 @@ def main():
         print(f"  {entry.get('name')} {entry.get('version')}")
 
     meta = config["source"]
-    icon = apps[0]["iconURL"] if apps else ""
+    icon = meta.get("iconURL") or (apps[0]["iconURL"] if apps else "")
     source = {
         "name": meta["name"],
         "identifier": meta["identifier"],
