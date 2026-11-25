@@ -15,6 +15,10 @@
     {
       "repo": "TR256i_Thermal",
       "featured": true
+    },
+    {
+      "repo": "AccordCAN_App",
+      "featured": true
     }
   ]
 }
